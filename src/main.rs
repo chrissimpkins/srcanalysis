@@ -25,81 +25,90 @@ fn main() {
         .nth(1)
         .expect("Error: Missing directory path argument");
 
-    let mut codepoint_counts: HashMap<u32, u128> = HashMap::new();
-    let mut total_chars: u128 = 0;
-    let mut ascii_chars: u128 = 0;
+    let mut codepoint_counts_by_extension: HashMap<String, HashMap<u32, u128>> = HashMap::new();
+    let mut total_chars_by_extension: HashMap<String, u128> = HashMap::new();
+    let mut ascii_chars_by_extension: HashMap<String, u128> = HashMap::new();
 
     // Walk the directory recursively
     for entry in walkdir::WalkDir::new(directory_path) {
         let entry = entry.unwrap();
         let path = entry.path();
         if path.is_file() {
+            let extension = path
+                .extension()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string();
             process_file(
                 path,
-                &mut codepoint_counts,
-                &mut total_chars,
-                &mut ascii_chars,
+                &extension,
+                &mut codepoint_counts_by_extension,
+                &mut total_chars_by_extension,
+                &mut ascii_chars_by_extension,
             );
         }
     }
 
-    // Create a vector of (codepoint, count) pairs
-    let mut count_vec: Vec<(u32, u128)> = codepoint_counts.into_iter().collect();
+    for (extension, codepoint_counts) in codepoint_counts_by_extension {
+        println!("\nFile Extension: {}", extension);
+        let mut count_vec: Vec<(u32, u128)> = codepoint_counts.into_iter().collect();
+        count_vec.sort_by(|a, b| b.1.cmp(&a.1));
 
-    // Sort the vector by count in descending order
-    count_vec.sort_by(|a, b| b.1.cmp(&a.1));
+        for (codepoint, count) in count_vec {
+            let character = char::from_u32(codepoint).unwrap_or(char::REPLACEMENT_CHARACTER);
+            let category = get_character_category(character);
+            let is_ascii = codepoint <= 0x7F;
+            println!(
+                "Character: {}, Codepoint: {:04x}, Category: {:?}, ASCII: {}, Count: {}",
+                character, codepoint, category, is_ascii, count
+            );
+        }
 
-    // Print the results
-    for (codepoint, count) in count_vec {
-        let character = char::from_u32(codepoint).unwrap_or(char::REPLACEMENT_CHARACTER);
-        let category = get_character_category(character);
-        let is_ascii = codepoint <= 0x7F;
+        let total_chars = total_chars_by_extension.get(&extension).unwrap_or(&0);
+        let ascii_chars = ascii_chars_by_extension.get(&extension).unwrap_or(&0);
+        let ascii_percent = (*ascii_chars as f64 / *total_chars as f64) * 100.0;
+        let non_ascii_percent = 100.0 - ascii_percent;
+        println!("\nSummary for .{} files:", extension);
+        println!("  ASCII encodings: {} ({:.2}%)", ascii_chars, ascii_percent);
         println!(
-            "Character: {}, Codepoint: {:04x}, Category: {:?}, ASCII: {}, Count: {}",
-            character, codepoint, category, is_ascii, count
+            "  Non-ASCII encodings: {} ({:.2}%)",
+            total_chars - ascii_chars,
+            non_ascii_percent
         );
     }
-
-    // Print summary report
-    let ascii_percent = (ascii_chars as f64 / total_chars as f64) * 100.0;
-    let non_ascii_percent = 100.0 - ascii_percent;
-    println!("\nSummary:");
-    println!("  ASCII encodings: {} ({:.2}%)", ascii_chars, ascii_percent);
-    println!(
-        "  Non-ASCII encodings: {} ({:.2}%)",
-        total_chars - ascii_chars,
-        non_ascii_percent
-    );
 }
 
 fn process_file(
     path: &Path,
-    codepoint_counts: &mut HashMap<u32, u128>,
-    total_chars: &mut u128,
-    ascii_chars: &mut u128,
+    extension: &str,
+    codepoint_counts_by_extension: &mut HashMap<String, HashMap<u32, u128>>,
+    total_chars_by_extension: &mut HashMap<String, u128>,
+    ascii_chars_by_extension: &mut HashMap<String, u128>,
 ) {
     match fs::read_to_string(path) {
         Ok(content) => {
-            // Normalize the content using NFC normalization
             let normalized_content = content.nfc().collect::<String>();
             for grapheme in normalized_content.graphemes(true) {
                 let c = grapheme.chars().next().unwrap();
                 if !c.is_control() {
-                    *codepoint_counts.entry(c as u32).or_insert(0) += 1;
-                    *total_chars += 1;
-                    if (c as u32) <= 0x7F {
-                        *ascii_chars += 1;
+                    let codepoint = c as u32;
+                    *codepoint_counts_by_extension
+                        .entry(extension.to_string())
+                        .or_insert_with(HashMap::new)
+                        .entry(codepoint)
+                        .or_insert(0) += 1;
+                    *total_chars_by_extension
+                        .entry(extension.to_string())
+                        .or_insert(0) += 1;
+                    if codepoint <= 0x7F {
+                        *ascii_chars_by_extension
+                            .entry(extension.to_string())
+                            .or_insert(0) += 1;
                     }
                 }
             }
         }
-        Err(err) => {
-            if let std::io::ErrorKind::InvalidData = err.kind() {
-                eprintln!("Skipping file with invalid UTF-8: {}", path.display());
-            } else {
-                eprintln!("Error reading file {}: {}", path.display(), err);
-            }
-        }
+        Err(e) => eprintln!("Error reading file {}: {}", path.display(), e),
     }
 }
 
