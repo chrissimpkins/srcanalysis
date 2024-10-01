@@ -15,7 +15,7 @@
 use std::collections::HashMap;
 use std::env;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use unicode_categories::UnicodeCategories;
 use unicode_normalization::UnicodeNormalization;
 use unicode_segmentation::UnicodeSegmentation;
@@ -24,13 +24,15 @@ fn main() {
     let directory_path = env::args()
         .nth(1)
         .expect("Error: Missing directory path argument");
+    let root_path = PathBuf::from(&directory_path);
 
     let mut codepoint_counts_by_extension: HashMap<String, HashMap<u32, u128>> = HashMap::new();
     let mut total_chars_by_extension: HashMap<String, u128> = HashMap::new();
     let mut ascii_chars_by_extension: HashMap<String, u128> = HashMap::new();
+    let mut file_examples_by_extension: HashMap<String, HashMap<u32, String>> = HashMap::new();
 
     // Walk the directory recursively
-    for entry in walkdir::WalkDir::new(directory_path) {
+    for entry in walkdir::WalkDir::new(&directory_path) {
         let entry = entry.unwrap();
         let path = entry.path();
         if path.is_file() {
@@ -42,9 +44,11 @@ fn main() {
             process_file(
                 path,
                 &extension,
+                &root_path,
                 &mut codepoint_counts_by_extension,
                 &mut total_chars_by_extension,
                 &mut ascii_chars_by_extension,
+                &mut file_examples_by_extension,
             );
         }
     }
@@ -58,9 +62,13 @@ fn main() {
             let character = char::from_u32(codepoint).unwrap_or(char::REPLACEMENT_CHARACTER);
             let category = get_character_category(character);
             let is_ascii = codepoint <= 0x7F;
+            let example_path = file_examples_by_extension
+                .get(&extension)
+                .and_then(|examples| examples.get(&codepoint))
+                .unwrap();
             println!(
-                "Character: {}, Codepoint: {:04x}, Category: {:?}, ASCII: {}, Count: {}",
-                character, codepoint, category, is_ascii, count
+                "Character: {}, Codepoint: {:04x}, Category: {:?}, ASCII: {}, Count: {}, Example File: {}",
+                character, codepoint, category, is_ascii, count, example_path
             );
         }
 
@@ -81,9 +89,11 @@ fn main() {
 fn process_file(
     path: &Path,
     extension: &str,
+    root_path: &Path,
     codepoint_counts_by_extension: &mut HashMap<String, HashMap<u32, u128>>,
     total_chars_by_extension: &mut HashMap<String, u128>,
     ascii_chars_by_extension: &mut HashMap<String, u128>,
+    file_examples_by_extension: &mut HashMap<String, HashMap<u32, String>>,
 ) {
     match fs::read_to_string(path) {
         Ok(content) => {
@@ -105,6 +115,16 @@ fn process_file(
                             .entry(extension.to_string())
                             .or_insert(0) += 1;
                     }
+                    file_examples_by_extension
+                        .entry(extension.to_string())
+                        .or_insert_with(HashMap::new)
+                        .entry(codepoint)
+                        .or_insert_with(|| {
+                            path.strip_prefix(root_path)
+                                .unwrap()
+                                .to_string_lossy()
+                                .to_string()
+                        });
                 }
             }
         }
